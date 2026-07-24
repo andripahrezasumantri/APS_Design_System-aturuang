@@ -1,0 +1,231 @@
+// ==========================================
+// KODE BACKEND: Code.gs (PWA Enabled)
+// APS System Design - aturuang
+// ==========================================
+
+function doGet(e) {
+  // Routing untuk PWA Manifest & Service Worker
+  if (e && e.parameter && e.parameter.pwa) {
+    var pwaType = e.parameter.pwa;
+    
+    // Serve manifest.json
+    if (pwaType === 'manifest') {
+      var manifest = {
+        "name": "aturuang - Financial Tracker",
+        "short_name": "aturuang",
+        "start_url": ScriptApp.getService().getUrl(),
+        "display": "standalone",
+        "background_color": "#0f172a",
+        "theme_color": "#4f46e5",
+        "orientation": "portrait",
+        "icons": [
+          {
+            "src": "https://cdn-icons-png.flaticon.com/512/10149/10149362.png",
+            "sizes": "192x192",
+            "type": "image/png"
+          },
+          {
+            "src": "https://cdn-icons-png.flaticon.com/512/10149/10149362.png",
+            "sizes": "512x512",
+            "type": "image/png"
+          }
+        ]
+      };
+      return ContentService.createTextOutput(JSON.stringify(manifest))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    // Serve sw.js (Service Worker)
+    if (pwaType === 'sw') {
+      var swCode = `
+        const CACHE_NAME = 'aturuang-pwa-v1';
+        const ASSETS_TO_CACHE = [
+          'https://cdn.tailwindcss.com',
+          'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css',
+          'https://cdn.jsdelivr.net/npm/chart.js'
+        ];
+
+        self.addEventListener('install', (event) => {
+          event.waitUntil(
+            caches.open(CACHE_NAME).then((cache) => {
+              return cache.addAll(ASSETS_TO_CACHE);
+            })
+          );
+          self.skipWaiting();
+        });
+
+        self.addEventListener('activate', (event) => {
+          event.waitUntil(
+            caches.keys().then((cacheNames) => {
+              return Promise.all(
+                cacheNames.map((cache) => {
+                  if (cache !== CACHE_NAME) {
+                    return caches.delete(cache);
+                  }
+                })
+              );
+            })
+          );
+          self.clients.claim();
+        });
+
+        self.addEventListener('fetch', (event) => {
+          if (event.request.url.includes('cdn') || event.request.url.includes('cdnjs')) {
+            event.respondWith(
+              caches.match(event.request).then((cachedResponse) => {
+                const fetchPromise = fetch(event.request).then((networkResponse) => {
+                  caches.open(CACHE_NAME).then((cache) => {
+                    cache.put(event.request, networkResponse.clone());
+                  });
+                  return networkResponse;
+                });
+                return cachedResponse || fetchPromise;
+              })
+            );
+          } else {
+            event.respondWith(
+              fetch(event.request).catch(() => caches.match(event.request))
+            );
+          }
+        });
+      `;
+      return ContentService.createTextOutput(swCode)
+        .setMimeType(ContentService.MimeType.JAVASCRIPT);
+    }
+  }
+
+  // Tampilan Default HTML
+  var template = HtmlService.createTemplateFromFile('Index');
+  template.scriptUrl = ScriptApp.getService().getUrl();
+  
+  return template.evaluate()
+    .setTitle('APS System Design - aturuang')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no');
+}
+
+function simpanData(data) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  var nominalAngka = parseFloat(data.nominal) || 0;
+  sheet.appendRow([ data.tanggal, data.tipe, data.kategori, nominalAngka, data.keterangan ]);
+  return "✅ Transaksi berhasil disimpan!";
+}
+
+function hapusData(rowIndex) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  sheet.deleteRow(rowIndex);
+  return "🗑️ Data berhasil dihapus!";
+}
+
+function clearAllData() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  var lastRow = sheet.getLastRow();
+  if (lastRow > 1) { 
+    sheet.deleteRows(2, lastRow - 1); 
+    return "🧹 Seluruh data berhasil dikosongkan.";
+  } else { 
+    return "⚠️ Data sudah kosong sebelumnya."; 
+  }
+}
+
+function getRingkasan(filterBulan, filterTahun) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  var data = sheet.getDataRange().getValues();
+  
+  var totalPemasukanBulanIni = 0;
+  var totalPengeluaranBulanIni = 0;
+  var saldoBulanSebelumnya = 0;
+  
+  var kategoriPengeluaran = {};
+  var riwayatTransaksi = [];
+  
+  var pakaiPokok = 0;
+  var pakaiGayaHidup = 0;
+  var pakaiMasaDepan = 0;
+
+  var listPokok = [ "Belanja Dapur & Sembako", "Tagihan (Listrik/Air/Wifi)", "Kebutuhan Anak", "Transportasi", "Kesehatan", "Cicilan & Hutang" ];
+  var listGayaHidup = [ "Jajan & Hiburan", "Sosial & Agama", "Pengeluaran Lain-lain" ];
+  var listMasaDepan = [ "Tabungan & Investasi" ];
+
+  var targetPeriodeInt = parseInt(filterTahun + filterBulan, 10);
+
+  for (var i = 1; i < data.length; i++) {
+    var tanggalRaw = data[i][0];
+    if (!tanggalRaw) continue;
+
+    var tgl = new Date(tanggalRaw);
+    if (isNaN(tgl.getTime())) continue;
+
+    var blnStr = ("0" + (tgl.getMonth() + 1)).slice(-2);
+    var thnStr = tgl.getFullYear().toString();
+    var itemPeriodeInt = parseInt(thnStr + blnStr, 10);
+
+    var tipe = data[i][1];
+    var kategori = data[i][2];
+    var nominal = parseFloat(data[i][3]) || 0;
+    var ket = data[i][4] || "";
+
+    if (itemPeriodeInt < targetPeriodeInt) {
+      if (tipe === "Pemasukan") {
+        saldoBulanSebelumnya += nominal;
+      } else if (tipe === "Pengeluaran") {
+        saldoBulanSebelumnya -= nominal;
+      }
+    }
+
+    if (itemPeriodeInt === targetPeriodeInt) {
+      if (tipe === "Pemasukan") {
+        totalPemasukanBulanIni += nominal;
+      } else if (tipe === "Pengeluaran") {
+        totalPengeluaranBulanIni += nominal;
+
+        if (kategoriPengeluaran[kategori]) {
+          kategoriPengeluaran[kategori] += nominal;
+        } else {
+          kategoriPengeluaran[kategori] = nominal;
+        }
+
+        if (listPokok.indexOf(kategori) !== -1) {
+          pakaiPokok += nominal;
+        } else if (listGayaHidup.indexOf(kategori) !== -1) {
+          pakaiGayaHidup += nominal;
+        } else if (listMasaDepan.indexOf(kategori) !== -1) {
+          pakaiMasaDepan += nominal;
+        }
+      }
+
+      var tglFormatted = thnStr + "-" + blnStr + "-" + ("0" + tgl.getDate()).slice(-2);
+      
+      riwayatTransaksi.push({
+        rowIndex: i + 1,
+        tanggal: tglFormatted,
+        tipe: tipe,
+        kategori: kategori,
+        nominal: nominal,
+        keterangan: ket
+      });
+    }
+  }
+
+  var saldoTotal = saldoBulanSebelumnya + totalPemasukanBulanIni - totalPengeluaranBulanIni;
+  var riwayatTerakhir = riwayatTransaksi.slice(-10).reverse();
+
+  var rekomendasiAlokasi = {
+    pokokIdeal: totalPemasukanBulanIni * 0.50,
+    gayaHidupIdeal: totalPemasukanBulanIni * 0.30,
+    masaDepanIdeal: totalPemasukanBulanIni * 0.20
+  };
+
+  return {
+    pemasukan: totalPemasukanBulanIni,
+    pengeluaran: totalPengeluaranBulanIni,
+    saldoBulanLalu: saldoBulanSebelumnya,
+    saldo: saldoTotal,
+    kategoriData: kategoriPengeluaran,
+    riwayat: riwayatTerakhir,
+    alokasiRekomendasi: rekomendasiAlokasi,
+    pakaiPokok: pakaiPokok,
+    pakaiGayaHidup: pakaiGayaHidup,
+    pakaiMasaDepan: pakaiMasaDepan
+  };
+}
