@@ -1,7 +1,6 @@
 {
   "name": "aturuang - Financial Tracker",
   "short_name": "aturuang",
-  "description": "Aplikasi pencatatan keuangan pribadi & keluarga modern",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#0f172a",
